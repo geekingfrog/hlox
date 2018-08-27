@@ -16,6 +16,7 @@ import Data.Text.Encoding (decodeUtf8')
 import qualified Lox.Token
 import qualified Lox.Scanner as Scanner
 import qualified Lox.Error as Err
+import qualified Lox.Parser
 
 main :: IO ()
 main = Env.getArgs >>= \case

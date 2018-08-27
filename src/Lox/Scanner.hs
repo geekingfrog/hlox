@@ -1,5 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE LambdaCase #-}
 
 module Lox.Scanner where
 
@@ -12,25 +11,26 @@ import qualified Data.Map.Strict               as Map
 
 import           Lox.Token
 import           Lox.Error
+import           Lox.Utils                      ( ifM )
 
 type ScanResult = Either LoxError Token
+
+data ScannerState = ScannerState
+    { src :: !Text -- remaining source to scan
+    , line :: Int -- current line number (for error reporting)
+    } deriving Show
 
 scanTokens :: Text -> [ScanResult]
 scanTokens source =
     State.evalState (Loops.unfoldM scanToken >>= addEOF) (ScannerState source 1)
 
-data ScannerState = ScannerState
-    { src :: !Text
-    , line :: Int
-    } deriving Show
-
 scanToken :: State ScannerState (Maybe ScanResult)
 scanToken = do
     source <- State.gets src
-    mbC <- advance
+    mbC    <- advance
     case mbC of
         Nothing -> pure Nothing
-        Just c -> parseChar c
+        Just c  -> parseChar c
 
 parseChar :: Char -> State ScannerState (Maybe ScanResult)
 parseChar c = case c of
@@ -44,24 +44,23 @@ parseChar c = case c of
     '+' -> addSingleToken PLUS
     ';' -> addSingleToken SEMICOLON
     '*' -> addSingleToken STAR
+    '/' -> ifM (match '/') parseComment (addSingleToken SLASH)
     '!' -> ifM (match '=') (addSingleToken BANG_EQUAL) (addSingleToken BANG)
     '=' -> ifM (match '=') (addSingleToken EQUAL_EQUAL) (addSingleToken EQUAL)
     '<' -> ifM (match '=') (addSingleToken LESS_EQUAL) (addSingleToken LESS)
     '>' ->
         ifM (match '=') (addSingleToken GREATER_EQUAL) (addSingleToken GREATER)
-    '/' -> ifM (match '/') parseComment (addSingleToken SLASH)
 
     -- ignore whitespaces
-    ' ' -> addSingleToken (IGNORED ' ')
-    '\r' -> addSingleToken (IGNORED '\r')
-    '\t' -> addSingleToken (IGNORED '\t')
+    ' '           -> addSingleToken (IGNORED ' ')
+    '\r'          -> addSingleToken (IGNORED '\r')
+    '\t'          -> addSingleToken (IGNORED '\t')
+    '\n'          -> incLine *> addSingleToken (IGNORED '\n')
 
-    '\n' -> incLine *> addSingleToken (IGNORED '\n')
-
-    '"' -> parseString
+    '"'           -> parseString
     _ | isDigit c -> parseNumber c
     _ | isAlpha c -> parseIdentifier c
-    _ -> unexpectedChar c
+    _             -> unexpectedChar c
 
 advance :: State ScannerState (Maybe Char)
 advance = do
@@ -87,9 +86,9 @@ parseComment = do
     comment <- Loops.unfoldM $ do
         x <- peek
         case x of
-            Nothing -> pure Nothing
+            Nothing   -> pure Nothing
             Just '\n' -> pure Nothing
-            Just _ -> advance
+            Just _    -> advance
     addSingleToken (COMMENT $ T.pack comment)
 
 parseString :: State ScannerState (Maybe ScanResult)
@@ -97,14 +96,14 @@ parseString = do
     str <- Loops.unfoldM $ do
         x <- peek
         case x of
-            Nothing -> pure $ Just Nothing
+            Nothing  -> pure $ Just Nothing
             Just '"' -> advance $> Nothing
-            Just c -> do
+            Just c   -> do
                 when (c == '\n') incLine
                 void advance
                 pure $ Just (Just c)
     case sequence str of
-        Nothing -> unterminatedString
+        Nothing  -> unterminatedString
         Just str -> addSingleToken (STRING $ T.pack str)
 
 parseNumber :: Char -> State ScannerState (Maybe ScanResult)
@@ -112,34 +111,37 @@ parseNumber firstDigit = do
     raw <- Loops.unfoldM $ do
         x <- peek
         case x of
-            Nothing -> pure Nothing
+            Nothing  -> pure Nothing
             Just '.' -> do
                 next <- peekNext
                 case next of
-                    Nothing -> pure Nothing
+                    Nothing            -> pure Nothing
                     Just n | isDigit n -> advance $> x
-                    _ -> pure Nothing
+                    _                  -> pure Nothing
             Just n | isDigit n -> advance $> Just n
-            _ -> pure Nothing
+            _                  -> pure Nothing
     case parseDouble (firstDigit : raw) of
         Nothing -> do
             l <- State.gets line
-            pure $ Just $ Left $ LoxError l Nothing (T.pack $ "Invalid number: " <> raw)
+            pure $ Just $ Left $ LoxError
+                l
+                Nothing
+                (T.pack $ "Invalid number: " <> raw)
         Just d -> addSingleToken (NUMBER d)
 
 parseDouble :: String -> Maybe Double
 parseDouble raw = case reads raw of
     [(d, "")] -> Just d
-    _ -> Nothing
+    _         -> Nothing
 
 parseIdentifier :: Char -> State ScannerState (Maybe ScanResult)
 parseIdentifier firstChar = do
     str <- Loops.unfoldM $ do
         x <- peek
         case x of
-            Nothing -> pure Nothing
+            Nothing                   -> pure Nothing
             Just c | isAlphaNumeric c -> advance $> Just c
-            _ -> pure Nothing
+            _                         -> pure Nothing
     let s = firstChar : str
     case Map.lookup s keywordsMap of
         Nothing -> addSingleToken (IDENTIFIER $ T.pack s)
@@ -175,14 +177,12 @@ unterminatedString = do
     l <- State.gets line
     pure $ Just $ Left $ LoxError l Nothing "Unterminated string."
 
-incLine = modify' (\s -> s {line = line s + 1})
+incLine = modify' (\s -> s { line = line s + 1 })
 
 match :: Char -> State ScannerState Bool
 match c = do
     source <- State.gets src
-    if T.null source || T.head source /= c
-        then pure False
-        else advance $> True
+    if T.null source || T.head source /= c then pure False else advance $> True
 
 peek :: State ScannerState (Maybe Char)
 peek = do
@@ -193,11 +193,6 @@ peekNext :: State ScannerState (Maybe Char)
 peekNext = do
     s <- State.gets src
     pure $ fmap fst $ fmap snd (T.uncons s) >>= T.uncons
-
-ifM :: Monad m => m Bool -> m a -> m a -> m a
-ifM cond t f = cond >>= \case
-    True  -> t
-    False -> f
 
 isDigit :: Char -> Bool
 isDigit c = c >= '0' && c <= '9'
