@@ -20,6 +20,9 @@ executable craftingInterpreters
   other-modules:       Lox.Token
                      , Lox.Error
                      , Lox.Scanner
+                     , Lox.Expr
+                     , Lox.Parser
+                     , Lox.Utils
   build-depends:       base >= 4.7 && < 5
                      , text
                      , bytestring
